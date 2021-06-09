@@ -22,7 +22,10 @@ dependencies:
     sdk: flutter
   flutter_plugin_android_lifecycle: ^2.0.1
   google_maps_flutter_platform_interface:
-    path: ../google_maps_flutter_platform_interface
+    git:
+      url: https://github.com/Milvintsiss/plugins.git
+      ref: localdev
+      path: packages/google_maps_flutter/google_maps_flutter_platform_interface
 
 dev_dependencies:
   flutter_test:
