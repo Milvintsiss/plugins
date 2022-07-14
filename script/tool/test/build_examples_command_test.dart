@@ -56,14 +56,14 @@ void main() {
 
     test('fails if building fails', () async {
       createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformIos: PlatformSupport.inline
+          platformSupport: <String, PlatformDetails>{
+            platformIOS: const PlatformDetails(PlatformSupport.inline),
           });
 
       processRunner
               .mockProcessesForExecutable[getFlutterCommand(mockPlatform)] =
           <io.Process>[
-        MockProcess.failing() // flutter packages get
+        MockProcess(exitCode: 1) // flutter pub get
       ];
 
       Error? commandError;
@@ -79,6 +79,35 @@ void main() {
             contains('The following packages had errors:'),
             contains('  plugin:\n'
                 '    plugin/example (iOS)'),
+          ]));
+    });
+
+    test('fails if a plugin has no examples', () async {
+      createFakePlugin('plugin', packagesDir,
+          examples: <String>[],
+          platformSupport: <String, PlatformDetails>{
+            platformIOS: const PlatformDetails(PlatformSupport.inline)
+          });
+
+      processRunner
+              .mockProcessesForExecutable[getFlutterCommand(mockPlatform)] =
+          <io.Process>[
+        MockProcess(exitCode: 1) // flutter pub get
+      ];
+
+      Error? commandError;
+      final List<String> output = await runCapturingPrint(
+          runner, <String>['build-examples', '--ios'], errorHandler: (Error e) {
+        commandError = e;
+      });
+
+      expect(commandError, isA<ToolExit>());
+      expect(
+          output,
+          containsAllInOrder(<Matcher>[
+            contains('The following packages had errors:'),
+            contains('  plugin:\n'
+                '    No examples found'),
           ]));
     });
 
@@ -105,13 +134,12 @@ void main() {
 
     test('building for iOS', () async {
       mockPlatform.isMacOS = true;
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformIos: PlatformSupport.inline
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformIOS: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       final List<String> output = await runCapturingPrint(runner,
           <String>['build-examples', '--ios', '--enable-experiment=exp1']);
@@ -162,13 +190,12 @@ void main() {
 
     test('building for Linux', () async {
       mockPlatform.isLinux = true;
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformLinux: PlatformSupport.inline,
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformLinux: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       final List<String> output = await runCapturingPrint(
           runner, <String>['build-examples', '--linux']);
@@ -211,13 +238,12 @@ void main() {
 
     test('building for macOS', () async {
       mockPlatform.isMacOS = true;
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformMacos: PlatformSupport.inline,
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformMacOS: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       final List<String> output = await runCapturingPrint(
           runner, <String>['build-examples', '--macos']);
@@ -257,13 +283,12 @@ void main() {
     });
 
     test('building for web', () async {
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformWeb: PlatformSupport.inline,
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformWeb: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       final List<String> output =
           await runCapturingPrint(runner, <String>['build-examples', '--web']);
@@ -307,13 +332,12 @@ void main() {
 
     test('building for Windows', () async {
       mockPlatform.isWindows = true;
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformWindows: PlatformSupport.inline
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformWindows: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       final List<String> output = await runCapturingPrint(
           runner, <String>['build-examples', '--windows']);
@@ -357,13 +381,12 @@ void main() {
     });
 
     test('building for Android', () async {
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformAndroid: PlatformSupport.inline
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformAndroid: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       final List<String> output = await runCapturingPrint(runner, <String>[
         'build-examples',
@@ -386,13 +409,12 @@ void main() {
     });
 
     test('enable-experiment flag for Android', () async {
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformAndroid: PlatformSupport.inline
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformAndroid: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       await runCapturingPrint(runner,
           <String>['build-examples', '--apk', '--enable-experiment=exp1']);
@@ -408,13 +430,12 @@ void main() {
     });
 
     test('enable-experiment flag for ios', () async {
-      final Directory pluginDirectory = createFakePlugin('plugin', packagesDir,
-          platformSupport: <String, PlatformSupport>{
-            kPlatformIos: PlatformSupport.inline
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformIOS: const PlatformDetails(PlatformSupport.inline),
           });
 
-      final Directory pluginExampleDirectory =
-          pluginDirectory.childDirectory('example');
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
 
       await runCapturingPrint(runner,
           <String>['build-examples', '--ios', '--enable-experiment=exp1']);
@@ -429,6 +450,183 @@ void main() {
                   '--no-codesign',
                   '--enable-experiment=exp1'
                 ],
+                pluginExampleDirectory.path),
+          ]));
+    });
+
+    test('logs skipped platforms', () async {
+      createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformAndroid: const PlatformDetails(PlatformSupport.inline),
+          });
+
+      final List<String> output = await runCapturingPrint(
+          runner, <String>['build-examples', '--apk', '--ios', '--macos']);
+
+      expect(
+        output,
+        containsAllInOrder(<Matcher>[
+          contains('Skipping unsupported platform(s): iOS, macOS'),
+        ]),
+      );
+    });
+
+    group('packages', () {
+      test('builds when requested platform is supported by example', () async {
+        final RepositoryPackage package = createFakePackage(
+            'package', packagesDir, isFlutter: true, extraFiles: <String>[
+          'example/ios/Runner.xcodeproj/project.pbxproj'
+        ]);
+
+        final List<String> output = await runCapturingPrint(
+            runner, <String>['build-examples', '--ios']);
+
+        expect(
+          output,
+          containsAllInOrder(<Matcher>[
+            contains('Running for package'),
+            contains('BUILDING package/example for iOS'),
+          ]),
+        );
+
+        expect(
+            processRunner.recordedCalls,
+            orderedEquals(<ProcessCall>[
+              ProcessCall(
+                  getFlutterCommand(mockPlatform),
+                  const <String>[
+                    'build',
+                    'ios',
+                    '--no-codesign',
+                  ],
+                  getExampleDir(package).path),
+            ]));
+      });
+
+      test('skips non-Flutter examples', () async {
+        createFakePackage('package', packagesDir, isFlutter: false);
+
+        final List<String> output = await runCapturingPrint(
+            runner, <String>['build-examples', '--ios']);
+
+        expect(
+          output,
+          containsAllInOrder(<Matcher>[
+            contains('Running for package'),
+            contains('No examples found supporting requested platform(s).'),
+          ]),
+        );
+
+        expect(processRunner.recordedCalls, orderedEquals(<ProcessCall>[]));
+      });
+
+      test('skips when there is no example', () async {
+        createFakePackage('package', packagesDir,
+            isFlutter: true, examples: <String>[]);
+
+        final List<String> output = await runCapturingPrint(
+            runner, <String>['build-examples', '--ios']);
+
+        expect(
+          output,
+          containsAllInOrder(<Matcher>[
+            contains('Running for package'),
+            contains('No examples found supporting requested platform(s).'),
+          ]),
+        );
+
+        expect(processRunner.recordedCalls, orderedEquals(<ProcessCall>[]));
+      });
+
+      test('skip when example does not support requested platform', () async {
+        createFakePackage('package', packagesDir,
+            isFlutter: true,
+            extraFiles: <String>['example/linux/CMakeLists.txt']);
+
+        final List<String> output = await runCapturingPrint(
+            runner, <String>['build-examples', '--ios']);
+
+        expect(
+          output,
+          containsAllInOrder(<Matcher>[
+            contains('Running for package'),
+            contains('Skipping iOS for package/example; not supported.'),
+            contains('No examples found supporting requested platform(s).'),
+          ]),
+        );
+
+        expect(processRunner.recordedCalls, orderedEquals(<ProcessCall>[]));
+      });
+
+      test('logs skipped platforms when only some are supported', () async {
+        final RepositoryPackage package = createFakePackage(
+            'package', packagesDir,
+            isFlutter: true,
+            extraFiles: <String>['example/linux/CMakeLists.txt']);
+
+        final List<String> output = await runCapturingPrint(
+            runner, <String>['build-examples', '--apk', '--linux']);
+
+        expect(
+          output,
+          containsAllInOrder(<Matcher>[
+            contains('Running for package'),
+            contains('Building for: Android, Linux'),
+            contains('Skipping Android for package/example; not supported.'),
+          ]),
+        );
+
+        expect(
+            processRunner.recordedCalls,
+            orderedEquals(<ProcessCall>[
+              ProcessCall(
+                  getFlutterCommand(mockPlatform),
+                  const <String>['build', 'linux'],
+                  getExampleDir(package).path),
+            ]));
+      });
+    });
+
+    test('The .pluginToolsConfig.yaml file', () async {
+      mockPlatform.isLinux = true;
+      final RepositoryPackage plugin = createFakePlugin('plugin', packagesDir,
+          platformSupport: <String, PlatformDetails>{
+            platformLinux: const PlatformDetails(PlatformSupport.inline),
+            platformMacOS: const PlatformDetails(PlatformSupport.inline),
+          });
+
+      final Directory pluginExampleDirectory = getExampleDir(plugin);
+
+      final File pluginExampleConfigFile =
+          pluginExampleDirectory.childFile('.pluginToolsConfig.yaml');
+      pluginExampleConfigFile
+          .writeAsStringSync('buildFlags:\n  global:\n     - "test argument"');
+
+      final List<String> output = <String>[
+        ...await runCapturingPrint(
+            runner, <String>['build-examples', '--linux']),
+        ...await runCapturingPrint(
+            runner, <String>['build-examples', '--macos']),
+      ];
+
+      expect(
+        output,
+        containsAllInOrder(<String>[
+          '\nBUILDING plugin/example for Linux',
+          '\nBUILDING plugin/example for macOS',
+        ]),
+      );
+
+      expect(
+          processRunner.recordedCalls,
+          orderedEquals(<ProcessCall>[
+            ProcessCall(
+                getFlutterCommand(mockPlatform),
+                const <String>['build', 'linux', 'test argument'],
+                pluginExampleDirectory.path),
+            ProcessCall(
+                getFlutterCommand(mockPlatform),
+                const <String>['build', 'macos', 'test argument'],
                 pluginExampleDirectory.path),
           ]));
     });
