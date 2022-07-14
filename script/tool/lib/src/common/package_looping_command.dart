@@ -9,10 +9,26 @@ import 'package:file/file.dart';
 import 'package:git/git.dart';
 import 'package:path/path.dart' as p;
 import 'package:platform/platform.dart';
+import 'package:pub_semver/pub_semver.dart';
 
 import 'core.dart';
 import 'plugin_command.dart';
 import 'process_runner.dart';
+import 'repository_package.dart';
+
+/// Enumeration options for package looping commands.
+enum PackageLoopingType {
+  /// Only enumerates the top level packages, without including any of their
+  /// subpackages.
+  topLevelOnly,
+
+  /// Enumerates the top level packages and any example packages they contain.
+  includeExamples,
+
+  /// Enumerates all packages recursively, including both example and
+  /// non-example subpackages.
+  includeAllSubpackages,
+}
 
 /// Possible outcomes of a command run for a package.
 enum RunState {
@@ -74,7 +90,23 @@ abstract class PackageLoopingCommand extends PluginCommand {
     Platform platform = const LocalPlatform(),
     GitDir? gitDir,
   }) : super(packagesDir,
-            processRunner: processRunner, platform: platform, gitDir: gitDir);
+            processRunner: processRunner, platform: platform, gitDir: gitDir) {
+    argParser.addOption(
+      _skipByFlutterVersionArg,
+      help: 'Skip any packages that require a Flutter version newer than '
+          'the provided version.',
+    );
+    argParser.addOption(
+      _skipByDartVersionArg,
+      help: 'Skip any packages that require a Dart version newer than '
+          'the provided version.',
+    );
+  }
+
+  static const String _skipByFlutterVersionArg =
+      'skip-if-not-supporting-flutter-version';
+  static const String _skipByDartVersionArg =
+      'skip-if-not-supporting-dart-version';
 
   /// Packages that had at least one [logWarning] call.
   final Set<PackageEnumerationEntry> _packagesWithWarnings =
@@ -84,12 +116,41 @@ abstract class PackageLoopingCommand extends PluginCommand {
   int _otherWarningCount = 0;
 
   /// The package currently being run by [runForPackage].
-  PackageEnumerationEntry? _currentPackage;
+  PackageEnumerationEntry? _currentPackageEntry;
 
   /// Called during [run] before any calls to [runForPackage]. This provides an
   /// opportunity to fail early if the command can't be run (e.g., because the
   /// arguments are invalid), and to set up any run-level state.
   Future<void> initializeRun() async {}
+
+  /// Returns the packages to process. By default, this returns the packages
+  /// defined by the standard tooling flags and the [inculdeSubpackages] option,
+  /// but can be overridden for custom package enumeration.
+  ///
+  /// Note: Consistent behavior across commands whenever possibel is a goal for
+  /// this tool, so this should be overridden only in rare cases.
+  Stream<PackageEnumerationEntry> getPackagesToProcess() async* {
+    switch (packageLoopingType) {
+      case PackageLoopingType.topLevelOnly:
+        yield* getTargetPackages(filterExcluded: false);
+        break;
+      case PackageLoopingType.includeExamples:
+        await for (final PackageEnumerationEntry packageEntry
+            in getTargetPackages(filterExcluded: false)) {
+          yield packageEntry;
+          yield* Stream<PackageEnumerationEntry>.fromIterable(packageEntry
+              .package
+              .getExamples()
+              .map((RepositoryPackage package) => PackageEnumerationEntry(
+                  package,
+                  excluded: packageEntry.excluded)));
+        }
+        break;
+      case PackageLoopingType.includeAllSubpackages:
+        yield* getTargetPackagesAndSubpackages(filterExcluded: false);
+        break;
+    }
+  }
 
   /// Runs the command for [package], returning a list of errors.
   ///
@@ -97,7 +158,7 @@ abstract class PackageLoopingCommand extends PluginCommand {
   /// be included in the final error summary (e.g., a command that only has a
   /// single failure mode), or strings that should be listed for that package
   /// in the final summary. An empty list indicates success.
-  Future<PackageResult> runForPackage(Directory package);
+  Future<PackageResult> runForPackage(RepositoryPackage package);
 
   /// Called during [run] after all calls to [runForPackage]. This provides an
   /// opportunity to do any cleanup of run-level state.
@@ -117,9 +178,9 @@ abstract class PackageLoopingCommand extends PluginCommand {
   /// to make the output structure easier to follow.
   bool get hasLongOutput => true;
 
-  /// Whether to loop over all packages (e.g., including example/), rather than
-  /// only top-level packages.
-  bool get includeSubpackages => false;
+  /// Whether to loop over top-level packages only, or some or all of their
+  /// sub-packages as well.
+  PackageLoopingType get packageLoopingType => PackageLoopingType.topLevelOnly;
 
   /// The text to output at the start when reporting one or more failures.
   /// This will be followed by a list of packages that reported errors, with
@@ -136,6 +197,9 @@ abstract class PackageLoopingCommand extends PluginCommand {
   /// This only needs to be overridden if the summary should provide extra
   /// context.
   String get failureListFooter => 'See above for full details.';
+
+  /// The summary string used for a successful run in the final overview output.
+  String get successSummaryMessage => 'ran';
 
   /// If true, all printing (including the summary) will be redirected to a
   /// buffer, and provided in a call to [handleCapturedOutput] at the end of
@@ -154,30 +218,12 @@ abstract class PackageLoopingCommand extends PluginCommand {
   /// messages. DO NOT RELY on someone noticing a warning; instead, use it for
   /// things that might be useful to someone debugging an unexpected result.
   void logWarning(String warningMessage) {
-    print(Colorize(warningMessage)..yellow());
-    if (_currentPackage != null) {
-      _packagesWithWarnings.add(_currentPackage!);
+    _printColorized(warningMessage, Styles.YELLOW);
+    if (_currentPackageEntry != null) {
+      _packagesWithWarnings.add(_currentPackageEntry!);
     } else {
       ++_otherWarningCount;
     }
-  }
-
-  /// Returns the identifying name to use for [package].
-  ///
-  /// Implementations should not expect a specific format for this string, since
-  /// it uses heuristics to try to be precise without being overly verbose. If
-  /// an exact format (e.g., published name, or basename) is required, that
-  /// should be used instead.
-  String getPackageDescription(Directory package) {
-    String packageName = getRelativePosixPath(package, from: packagesDir);
-    final List<String> components = p.posix.split(packageName);
-    // For the common federated plugin pattern of `foo/foo_subpackage`, drop
-    // the first part since it's not useful.
-    if (components.length >= 2 &&
-        components[1].startsWith('${components[0]}_')) {
-      packageName = p.posix.joinAll(components.sublist(1));
-    }
-    return packageName;
   }
 
   /// Returns the relative path from [from] to [entity] in Posix style.
@@ -219,36 +265,64 @@ abstract class PackageLoopingCommand extends PluginCommand {
   Future<bool> _runInternal() async {
     _packagesWithWarnings.clear();
     _otherWarningCount = 0;
-    _currentPackage = null;
+    _currentPackageEntry = null;
+
+    final String minFlutterVersionArg = getStringArg(_skipByFlutterVersionArg);
+    final Version? minFlutterVersion = minFlutterVersionArg.isEmpty
+        ? null
+        : Version.parse(minFlutterVersionArg);
+    final String minDartVersionArg = getStringArg(_skipByDartVersionArg);
+    final Version? minDartVersion =
+        minDartVersionArg.isEmpty ? null : Version.parse(minDartVersionArg);
+
+    final DateTime runStart = DateTime.now();
 
     await initializeRun();
 
-    final List<PackageEnumerationEntry> packages = includeSubpackages
-        ? await getTargetPackagesAndSubpackages(filterExcluded: false).toList()
-        : await getTargetPackages(filterExcluded: false).toList();
+    final List<PackageEnumerationEntry> targetPackages =
+        await getPackagesToProcess().toList();
 
     final Map<PackageEnumerationEntry, PackageResult> results =
         <PackageEnumerationEntry, PackageResult>{};
-    for (final PackageEnumerationEntry package in packages) {
-      _currentPackage = package;
-      _printPackageHeading(package);
+    for (final PackageEnumerationEntry entry in targetPackages) {
+      final DateTime packageStart = DateTime.now();
+      _currentPackageEntry = entry;
+      _printPackageHeading(entry, startTime: runStart);
 
       // Command implementations should never see excluded packages; they are
       // included at this level only for logging.
-      if (package.excluded) {
-        results[package] = PackageResult.exclude();
+      if (entry.excluded) {
+        results[entry] = PackageResult.exclude();
         continue;
       }
 
-      final PackageResult result = await runForPackage(package.directory);
-      if (result.state == RunState.skipped) {
-        final String message =
-            '${indentation}SKIPPING: ${result.details.first}';
-        captureOutput ? print(message) : print(Colorize(message)..darkGray());
+      PackageResult result;
+      try {
+        result = await _runForPackageIfSupported(entry.package,
+            minFlutterVersion: minFlutterVersion,
+            minDartVersion: minDartVersion);
+      } catch (e, stack) {
+        printError(e.toString());
+        printError(stack.toString());
+        result = PackageResult.fail(<String>['Unhandled exception']);
       }
-      results[package] = result;
+      if (result.state == RunState.skipped) {
+        _printColorized('${indentation}SKIPPING: ${result.details.first}',
+            Styles.DARK_GRAY);
+      }
+      results[entry] = result;
+
+      // Only log an elapsed time for long output; for short output, comparing
+      // the relative timestamps of successive entries should be trivial.
+      if (shouldLogTiming && hasLongOutput) {
+        final Duration elapsedTime = DateTime.now().difference(packageStart);
+        _printColorized(
+            '\n[${entry.package.displayName} completed in '
+            '${elapsedTime.inMinutes}m ${elapsedTime.inSeconds % 60}s]',
+            Styles.DARK_GRAY);
+      }
     }
-    _currentPackage = null;
+    _currentPackageEntry = null;
 
     completeRun();
 
@@ -256,17 +330,47 @@ abstract class PackageLoopingCommand extends PluginCommand {
     // If there were any errors reported, summarize them and exit.
     if (results.values
         .any((PackageResult result) => result.state == RunState.failed)) {
-      _printFailureSummary(packages, results);
+      _printFailureSummary(targetPackages, results);
       return false;
     }
 
     // Otherwise, print a summary of what ran for ease of auditing that all the
     // expected tests ran.
-    _printRunSummary(packages, results);
+    _printRunSummary(targetPackages, results);
 
     print('\n');
     _printSuccess('No issues found!');
     return true;
+  }
+
+  /// Returns the result of running [runForPackage] if the package is supported
+  /// by any run constraints, or a skip result if it is not.
+  Future<PackageResult> _runForPackageIfSupported(
+    RepositoryPackage package, {
+    Version? minFlutterVersion,
+    Version? minDartVersion,
+  }) async {
+    if (minFlutterVersion != null) {
+      final Pubspec pubspec = package.parsePubspec();
+      final VersionConstraint? flutterConstraint =
+          pubspec.environment?['flutter'];
+      if (flutterConstraint != null &&
+          !flutterConstraint.allows(minFlutterVersion)) {
+        return PackageResult.skip(
+            'Does not support Flutter ${minFlutterVersion.toString()}');
+      }
+    }
+
+    if (minDartVersion != null) {
+      final Pubspec pubspec = package.parsePubspec();
+      final VersionConstraint? dartConstraint = pubspec.environment?['sdk'];
+      if (dartConstraint != null && !dartConstraint.allows(minDartVersion)) {
+        return PackageResult.skip(
+            'Does not support Dart ${minDartVersion.toString()}');
+      }
+    }
+
+    return await runForPackage(package);
   }
 
   void _printSuccess(String message) {
@@ -283,11 +387,20 @@ abstract class PackageLoopingCommand extends PluginCommand {
   /// Something is always printed to make it easier to distinguish between
   /// a command running for a package and producing no output, and a command
   /// not having been run for a package.
-  void _printPackageHeading(PackageEnumerationEntry package) {
-    final String packageDisplayName = getPackageDescription(package.directory);
-    String heading = package.excluded
+  void _printPackageHeading(PackageEnumerationEntry entry,
+      {required DateTime startTime}) {
+    final String packageDisplayName = entry.package.displayName;
+    String heading = entry.excluded
         ? 'Not running for $packageDisplayName; excluded'
         : 'Running for $packageDisplayName';
+
+    if (shouldLogTiming) {
+      final Duration relativeTime = DateTime.now().difference(startTime);
+      final String timeString = _formatDurationAsRelativeTime(relativeTime);
+      heading =
+          hasLongOutput ? '$heading [@$timeString]' : '[$timeString] $heading';
+    }
+
     if (hasLongOutput) {
       heading = '''
 
@@ -295,17 +408,10 @@ abstract class PackageLoopingCommand extends PluginCommand {
 || $heading
 ============================================================
 ''';
-    } else if (!package.excluded) {
+    } else if (!entry.excluded) {
       heading = '$heading...';
     }
-    if (captureOutput) {
-      print(heading);
-    } else {
-      final Colorize colorizeHeading = Colorize(heading);
-      print(package.excluded
-          ? colorizeHeading.darkGray()
-          : colorizeHeading.cyan());
-    }
+    _printColorized(heading, entry.excluded ? Styles.DARK_GRAY : Styles.CYAN);
   }
 
   /// Prints a summary of packges run, packages skipped, and warnings.
@@ -349,21 +455,22 @@ abstract class PackageLoopingCommand extends PluginCommand {
 
   /// Prints a one-line-per-package overview of the run results for each
   /// package.
-  void _printPerPackageRunOverview(List<PackageEnumerationEntry> packages,
+  void _printPerPackageRunOverview(
+      List<PackageEnumerationEntry> packageEnumeration,
       {required Set<PackageEnumerationEntry> skipped}) {
     print('Run overview:');
-    for (final PackageEnumerationEntry package in packages) {
-      final bool hadWarning = _packagesWithWarnings.contains(package);
+    for (final PackageEnumerationEntry entry in packageEnumeration) {
+      final bool hadWarning = _packagesWithWarnings.contains(entry);
       Styles style;
       String summary;
-      if (package.excluded) {
+      if (entry.excluded) {
         summary = 'excluded';
         style = Styles.DARK_GRAY;
-      } else if (skipped.contains(package)) {
+      } else if (skipped.contains(entry)) {
         summary = 'skipped';
         style = hadWarning ? Styles.LIGHT_YELLOW : Styles.DARK_GRAY;
       } else {
-        summary = 'ran';
+        summary = successSummaryMessage;
         style = hadWarning ? Styles.YELLOW : Styles.GREEN;
       }
       if (hadWarning) {
@@ -373,18 +480,18 @@ abstract class PackageLoopingCommand extends PluginCommand {
       if (!captureOutput) {
         summary = (Colorize(summary)..apply(style)).toString();
       }
-      print('  ${getPackageDescription(package.directory)} - $summary');
+      print('  ${entry.package.displayName} - $summary');
     }
     print('');
   }
 
   /// Prints a summary of all of the failures from [results].
-  void _printFailureSummary(List<PackageEnumerationEntry> packages,
+  void _printFailureSummary(List<PackageEnumerationEntry> packageEnumeration,
       Map<PackageEnumerationEntry, PackageResult> results) {
     const String indentation = '  ';
     _printError(failureListHeader);
-    for (final PackageEnumerationEntry package in packages) {
-      final PackageResult result = results[package]!;
+    for (final PackageEnumerationEntry entry in packageEnumeration) {
+      final PackageResult result = results[entry]!;
       if (result.state == RunState.failed) {
         final String errorIndentation = indentation * 2;
         String errorDetails = '';
@@ -392,10 +499,26 @@ abstract class PackageLoopingCommand extends PluginCommand {
           errorDetails =
               ':\n$errorIndentation${result.details.join('\n$errorIndentation')}';
         }
-        _printError(
-            '$indentation${getPackageDescription(package.directory)}$errorDetails');
+        _printError('$indentation${entry.package.displayName}$errorDetails');
       }
     }
     _printError(failureListFooter);
+  }
+
+  /// Prints [message] in [color] unless [captureOutput] is set, in which case
+  /// it is printed without color.
+  void _printColorized(String message, Styles color) {
+    if (captureOutput) {
+      print(message);
+    } else {
+      print(Colorize(message)..apply(color));
+    }
+  }
+
+  /// Returns a duration [d] formatted as minutes:seconds. Does not use hours,
+  /// since time logging is primarily intended for CI, where durations should
+  /// always be less than an hour.
+  String _formatDurationAsRelativeTime(Duration d) {
+    return '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
   }
 }

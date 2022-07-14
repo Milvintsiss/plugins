@@ -5,15 +5,13 @@
 import 'dart:async';
 
 import 'package:file/file.dart';
-import 'package:flutter_plugin_tools/src/common/plugin_command.dart';
 import 'package:platform/platform.dart';
 import 'package:yaml/yaml.dart';
 
 import 'common/core.dart';
 import 'common/package_looping_command.dart';
 import 'common/process_runner.dart';
-
-const int _exitPackagesGetFailed = 3;
+import 'common/repository_package.dart';
 
 /// A command to run Dart analysis on packages.
 class AnalyzeCommand extends PackageLoopingCommand {
@@ -55,8 +53,9 @@ class AnalyzeCommand extends PackageLoopingCommand {
   final bool hasLongOutput = false;
 
   /// Checks that there are no unexpected analysis_options.yaml files.
-  bool _hasUnexpecetdAnalysisOptions(Directory package) {
-    final List<FileSystemEntity> files = package.listSync(recursive: true);
+  bool _hasUnexpecetdAnalysisOptions(RepositoryPackage package) {
+    final List<FileSystemEntity> files =
+        package.directory.listSync(recursive: true);
     for (final FileSystemEntity file in files) {
       if (file.basename != 'analysis_options.yaml' &&
           file.basename != '.analysis_options') {
@@ -82,48 +81,17 @@ class AnalyzeCommand extends PackageLoopingCommand {
     return false;
   }
 
-  /// Ensures that the dependent packages have been fetched for all packages
-  /// (including their sub-packages) that will be analyzed.
-  Future<bool> _runPackagesGetOnTargetPackages() async {
-    final List<Directory> packageDirectories =
-        await getTargetPackagesAndSubpackages()
-            .map((PackageEnumerationEntry package) => package.directory)
-            .toList();
-    final Set<String> packagePaths =
-        packageDirectories.map((Directory dir) => dir.path).toSet();
-    packageDirectories.removeWhere((Directory directory) {
-      // Remove the 'example' subdirectories; 'flutter packages get'
-      // automatically runs 'pub get' there as part of handling the parent
-      // directory.
-      return directory.basename == 'example' &&
-          packagePaths.contains(directory.parent.path);
-    });
-    for (final Directory package in packageDirectories) {
-      final int exitCode = await processRunner.runAndStream(
-          flutterCommand, <String>['packages', 'get'],
-          workingDir: package);
-      if (exitCode != 0) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   @override
   Future<void> initializeRun() async {
-    print('Fetching dependencies...');
-    if (!await _runPackagesGetOnTargetPackages()) {
-      printError('Unable to get dependencies.');
-      throw ToolExit(_exitPackagesGetFailed);
-    }
-
     _allowedCustomAnalysisDirectories =
         getStringListArg(_customAnalysisFlag).expand<String>((String item) {
       if (item.endsWith('.yaml')) {
         final File file = packagesDir.fileSystem.file(item);
-        return (loadYaml(file.readAsStringSync()) as YamlList)
-            .toList()
-            .cast<String>();
+        final Object? yaml = loadYaml(file.readAsStringSync());
+        if (yaml == null) {
+          return <String>[];
+        }
+        return (yaml as YamlList).toList().cast<String>();
       }
       return <String>[item];
     }).toSet();
@@ -135,13 +103,35 @@ class AnalyzeCommand extends PackageLoopingCommand {
   }
 
   @override
-  Future<PackageResult> runForPackage(Directory package) async {
+  Future<PackageResult> runForPackage(RepositoryPackage package) async {
+    // Analysis runs over the package and all subpackages, so all of them need
+    // `flutter pub get` run before analyzing. `example` packages can be
+    // skipped since 'flutter packages get' automatically runs `pub get` in
+    // examples as part of handling the parent directory.
+    final List<RepositoryPackage> packagesToGet = <RepositoryPackage>[
+      package,
+      ...await getSubpackages(package).toList(),
+    ];
+    for (final RepositoryPackage packageToGet in packagesToGet) {
+      if (packageToGet.directory.basename != 'example' ||
+          !RepositoryPackage(packageToGet.directory.parent)
+              .pubspecFile
+              .existsSync()) {
+        final int exitCode = await processRunner.runAndStream(
+            flutterCommand, <String>['pub', 'get'],
+            workingDir: packageToGet.directory);
+        if (exitCode != 0) {
+          return PackageResult.fail(<String>['Unable to get dependencies']);
+        }
+      }
+    }
+
     if (_hasUnexpecetdAnalysisOptions(package)) {
       return PackageResult.fail(<String>['Unexpected local analysis options']);
     }
     final int exitCode = await processRunner.runAndStream(
         _dartBinaryPath, <String>['analyze', '--fatal-infos'],
-        workingDir: package);
+        workingDir: package.directory);
     if (exitCode != 0) {
       return PackageResult.fail();
     }

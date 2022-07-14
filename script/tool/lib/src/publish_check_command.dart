@@ -10,12 +10,12 @@ import 'package:file/file.dart';
 import 'package:http/http.dart' as http;
 import 'package:platform/platform.dart';
 import 'package:pub_semver/pub_semver.dart';
-import 'package:pubspec_parse/pubspec_parse.dart';
 
 import 'common/core.dart';
 import 'common/package_looping_command.dart';
 import 'common/process_runner.dart';
 import 'common/pub_version_finder.dart';
+import 'common/repository_package.dart';
 
 /// A command to check that packages are publishable via 'dart publish'.
 class PublishCheckCommand extends PackageLoopingCommand {
@@ -75,11 +75,18 @@ class PublishCheckCommand extends PackageLoopingCommand {
   }
 
   @override
-  Future<PackageResult> runForPackage(Directory package) async {
-    final _PublishCheckResult? result = await _passesPublishCheck(package);
+  Future<PackageResult> runForPackage(RepositoryPackage package) async {
+    _PublishCheckResult? result = await _passesPublishCheck(package);
     if (result == null) {
       return PackageResult.skip('Package is marked as unpublishable.');
     }
+    if (!_passesAuthorsCheck(package)) {
+      _printImportantStatusMessage(
+          'No AUTHORS file found. Packages must include an AUTHORS file.',
+          isError: true);
+      result = _PublishCheckResult.error;
+    }
+
     if (result.index > _overallResult.index) {
       _overallResult = result;
     }
@@ -114,25 +121,24 @@ class PublishCheckCommand extends PackageLoopingCommand {
     }
   }
 
-  Pubspec? _tryParsePubspec(Directory package) {
-    final File pubspecFile = package.childFile('pubspec.yaml');
-
+  Pubspec? _tryParsePubspec(RepositoryPackage package) {
     try {
-      return Pubspec.parse(pubspecFile.readAsStringSync());
+      return package.parsePubspec();
     } on Exception catch (exception) {
       print(
-        'Failed to parse `pubspec.yaml` at ${pubspecFile.path}: $exception}',
+        'Failed to parse `pubspec.yaml` at ${package.pubspecFile.path}: '
+        '$exception',
       );
       return null;
     }
   }
 
-  Future<bool> _hasValidPublishCheckRun(Directory package) async {
+  Future<bool> _hasValidPublishCheckRun(RepositoryPackage package) async {
     print('Running pub publish --dry-run:');
     final io.Process process = await processRunner.start(
       flutterCommand,
       <String>['pub', 'publish', '--', '--dry-run'],
-      workingDirectory: package,
+      workingDirectory: package.directory,
     );
 
     final StringBuffer outputBuffer = StringBuffer();
@@ -183,11 +189,12 @@ class PublishCheckCommand extends PackageLoopingCommand {
 
   /// Returns the result of the publish check, or null if the package is marked
   /// as unpublishable.
-  Future<_PublishCheckResult?> _passesPublishCheck(Directory package) async {
-    final String packageName = package.basename;
+  Future<_PublishCheckResult?> _passesPublishCheck(
+      RepositoryPackage package) async {
+    final String packageName = package.directory.basename;
     final Pubspec? pubspec = _tryParsePubspec(package);
     if (pubspec == null) {
-      print('no pubspec');
+      print('No valid pubspec found.');
       return _PublishCheckResult.error;
     } else if (pubspec.publishTo == 'none') {
       return null;
@@ -219,7 +226,7 @@ class PublishCheckCommand extends PackageLoopingCommand {
   Future<_PublishCheckResult> _checkPublishingStatus(
       {required String packageName, required Version? version}) async {
     final PubVersionFinderResponse pubVersionFinderResponse =
-        await _pubVersionFinder.getPackageVersion(package: packageName);
+        await _pubVersionFinder.getPackageVersion(packageName: packageName);
     switch (pubVersionFinderResponse.result) {
       case PubVersionFinderResult.success:
         return pubVersionFinderResponse.versions.contains(version)
@@ -235,6 +242,16 @@ HTTP response: ${pubVersionFinderResponse.httpResponse.body}
       case PubVersionFinderResult.noPackageFound:
         return _PublishCheckResult.needsPublishing;
     }
+  }
+
+  bool _passesAuthorsCheck(RepositoryPackage package) {
+    final List<String> pathComponents =
+        package.directory.fileSystem.path.split(package.path);
+    if (pathComponents.contains('third_party')) {
+      // Third-party packages aren't required to have an AUTHORS file.
+      return true;
+    }
+    return package.authorsFile.existsSync();
   }
 
   void _printImportantStatusMessage(String message, {required bool isError}) {

@@ -40,9 +40,9 @@ void main() {
     });
 
     test('runs flutter test on each plugin', () async {
-      final Directory plugin1Dir = createFakePlugin('plugin1', packagesDir,
+      final RepositoryPackage plugin1 = createFakePlugin('plugin1', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
-      final Directory plugin2Dir = createFakePlugin('plugin2', packagesDir,
+      final RepositoryPackage plugin2 = createFakePlugin('plugin2', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
 
       await runCapturingPrint(runner, <String>['test']);
@@ -51,9 +51,29 @@ void main() {
         processRunner.recordedCalls,
         orderedEquals(<ProcessCall>[
           ProcessCall(getFlutterCommand(mockPlatform),
-              const <String>['test', '--color'], plugin1Dir.path),
+              const <String>['test', '--color'], plugin1.path),
           ProcessCall(getFlutterCommand(mockPlatform),
-              const <String>['test', '--color'], plugin2Dir.path),
+              const <String>['test', '--color'], plugin2.path),
+        ]),
+      );
+    });
+
+    test('runs flutter test on Flutter package example tests', () async {
+      final RepositoryPackage plugin = createFakePlugin('a_plugin', packagesDir,
+          extraFiles: <String>[
+            'test/empty_test.dart',
+            'example/test/an_example_test.dart'
+          ]);
+
+      await runCapturingPrint(runner, <String>['test']);
+
+      expect(
+        processRunner.recordedCalls,
+        orderedEquals(<ProcessCall>[
+          ProcessCall(getFlutterCommand(mockPlatform),
+              const <String>['test', '--color'], plugin.path),
+          ProcessCall(getFlutterCommand(mockPlatform),
+              const <String>['test', '--color'], getExampleDir(plugin).path),
         ]),
       );
     });
@@ -67,8 +87,8 @@ void main() {
       processRunner
               .mockProcessesForExecutable[getFlutterCommand(mockPlatform)] =
           <io.Process>[
-        MockProcess.failing(), // plugin 1 test
-        MockProcess.succeeding(), // plugin 2 test
+        MockProcess(exitCode: 1), // plugin 1 test
+        MockProcess(), // plugin 2 test
       ];
 
       Error? commandError;
@@ -88,7 +108,7 @@ void main() {
 
     test('skips testing plugins without test directory', () async {
       createFakePlugin('plugin1', packagesDir);
-      final Directory plugin2Dir = createFakePlugin('plugin2', packagesDir,
+      final RepositoryPackage plugin2 = createFakePlugin('plugin2', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
 
       await runCapturingPrint(runner, <String>['test']);
@@ -97,15 +117,15 @@ void main() {
         processRunner.recordedCalls,
         orderedEquals(<ProcessCall>[
           ProcessCall(getFlutterCommand(mockPlatform),
-              const <String>['test', '--color'], plugin2Dir.path),
+              const <String>['test', '--color'], plugin2.path),
         ]),
       );
     });
 
-    test('runs pub run test on non-Flutter packages', () async {
-      final Directory pluginDir = createFakePlugin('a', packagesDir,
+    test('runs dart run test on non-Flutter packages', () async {
+      final RepositoryPackage plugin = createFakePlugin('a', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
-      final Directory packageDir = createFakePackage('b', packagesDir,
+      final RepositoryPackage package = createFakePackage('b', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
 
       await runCapturingPrint(
@@ -117,12 +137,34 @@ void main() {
           ProcessCall(
               getFlutterCommand(mockPlatform),
               const <String>['test', '--color', '--enable-experiment=exp1'],
-              pluginDir.path),
-          ProcessCall('dart', const <String>['pub', 'get'], packageDir.path),
+              plugin.path),
+          ProcessCall('dart', const <String>['pub', 'get'], package.path),
           ProcessCall(
               'dart',
-              const <String>['pub', 'run', '--enable-experiment=exp1', 'test'],
-              packageDir.path),
+              const <String>['run', '--enable-experiment=exp1', 'test'],
+              package.path),
+        ]),
+      );
+    });
+
+    test('runs dart run test on non-Flutter package examples', () async {
+      final RepositoryPackage package = createFakePackage(
+          'a_package', packagesDir, extraFiles: <String>[
+        'test/empty_test.dart',
+        'example/test/an_example_test.dart'
+      ]);
+
+      await runCapturingPrint(runner, <String>['test']);
+
+      expect(
+        processRunner.recordedCalls,
+        orderedEquals(<ProcessCall>[
+          ProcessCall('dart', const <String>['pub', 'get'], package.path),
+          ProcessCall('dart', const <String>['run', 'test'], package.path),
+          ProcessCall('dart', const <String>['pub', 'get'],
+              getExampleDir(package).path),
+          ProcessCall('dart', const <String>['run', 'test'],
+              getExampleDir(package).path),
         ]),
       );
     });
@@ -132,7 +174,7 @@ void main() {
           extraFiles: <String>['test/empty_test.dart']);
 
       processRunner.mockProcessesForExecutable['dart'] = <io.Process>[
-        MockProcess.failing(), // dart pub get
+        MockProcess(exitCode: 1), // dart pub get
       ];
 
       Error? commandError;
@@ -156,8 +198,8 @@ void main() {
           extraFiles: <String>['test/empty_test.dart']);
 
       processRunner.mockProcessesForExecutable['dart'] = <io.Process>[
-        MockProcess.succeeding(), // dart pub get
-        MockProcess.failing(), // dart pub run test
+        MockProcess(), // dart pub get
+        MockProcess(exitCode: 1), // dart pub run test
       ];
 
       Error? commandError;
@@ -176,12 +218,12 @@ void main() {
     });
 
     test('runs on Chrome for web plugins', () async {
-      final Directory pluginDir = createFakePlugin(
+      final RepositoryPackage plugin = createFakePlugin(
         'plugin',
         packagesDir,
         extraFiles: <String>['test/empty_test.dart'],
-        platformSupport: <String, PlatformSupport>{
-          kPlatformWeb: PlatformSupport.inline,
+        platformSupport: <String, PlatformDetails>{
+          platformWeb: const PlatformDetails(PlatformSupport.inline),
         },
       );
 
@@ -193,15 +235,15 @@ void main() {
           ProcessCall(
               getFlutterCommand(mockPlatform),
               const <String>['test', '--color', '--platform=chrome'],
-              pluginDir.path),
+              plugin.path),
         ]),
       );
     });
 
     test('enable-experiment flag', () async {
-      final Directory pluginDir = createFakePlugin('a', packagesDir,
+      final RepositoryPackage plugin = createFakePlugin('a', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
-      final Directory packageDir = createFakePackage('b', packagesDir,
+      final RepositoryPackage package = createFakePackage('b', packagesDir,
           extraFiles: <String>['test/empty_test.dart']);
 
       await runCapturingPrint(
@@ -213,12 +255,12 @@ void main() {
           ProcessCall(
               getFlutterCommand(mockPlatform),
               const <String>['test', '--color', '--enable-experiment=exp1'],
-              pluginDir.path),
-          ProcessCall('dart', const <String>['pub', 'get'], packageDir.path),
+              plugin.path),
+          ProcessCall('dart', const <String>['pub', 'get'], package.path),
           ProcessCall(
               'dart',
-              const <String>['pub', 'run', '--enable-experiment=exp1', 'test'],
-              packageDir.path),
+              const <String>['run', '--enable-experiment=exp1', 'test'],
+              package.path),
         ]),
       );
     });
