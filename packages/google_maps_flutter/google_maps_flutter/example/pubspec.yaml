@@ -15,19 +15,19 @@ dependencies:
     # path: ../
     git:
       url: https://github.com/Milvintsiss/plugins.git
-      ref: fork-2.2.1
+      ref: fork-google_maps-2.2.1
       path: packages/google_maps_flutter/google_maps_flutter
   google_maps_flutter_android:
     # path: ../../google_maps_flutter_android
     git:
       url: https://github.com/Milvintsiss/plugins.git
-      ref: fork-2.2.1
+      ref: fork-google_maps-2.2.1
       path: packages/google_maps_flutter/google_maps_flutter_android
   google_maps_flutter_platform_interface:
     # path: ../../google_maps_flutter_android
     git:
       url: https://github.com/Milvintsiss/plugins.git
-      ref: fork-2.2.1
+      ref: fork-google_maps-2.2.1
       path: packages/google_maps_flutter/google_maps_flutter_platform_interface
 
 dev_dependencies:
