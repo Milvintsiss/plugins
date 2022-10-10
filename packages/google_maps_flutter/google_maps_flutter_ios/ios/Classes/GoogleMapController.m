@@ -419,7 +419,7 @@
   if (![duration isKindOfClass:[NSNull class]]) {
     [CATransaction setValue:duration forKey:kCATransactionAnimationDuration];
   }
-  [self._mapView animateWithCameraUpdate:cameraUpdate];
+  [self.mapView animateWithCameraUpdate:cameraUpdate];
   [CATransaction commit];
 }
 
