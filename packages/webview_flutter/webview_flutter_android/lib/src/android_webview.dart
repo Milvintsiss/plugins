@@ -958,6 +958,10 @@ class WebChromeClient extends JavaObject {
   /// Notify the host application that a file should be downloaded.
   void onProgressChanged(WebView webView, int progress) {}
 
+  Future<List<String>> onShowFileChooser(WebView webView) async {
+    return [];
+  }
+
   @override
   WebChromeClient copy() {
     return WebChromeClient.detached(onProgressChanged: onProgressChanged);
