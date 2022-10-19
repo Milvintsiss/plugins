@@ -45,8 +45,8 @@ public class WebChromeClientFlutterApiImpl extends WebChromeClientFlutterApi {
   public void onShowFileChooser(
       WebChromeClient webChromeClient, WebView webView, Reply<List<String>> callback) {
     super.onShowFileChooser(
-        instanceManager.getInstanceId(webChromeClient),
-        instanceManager.getInstanceId(webView),
+        getIdentifierForClient(webChromeClient),
+        instanceManager.getIdentifierForStrongReference(webView),
         callback);
   }
 
