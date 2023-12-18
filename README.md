@@ -1,3 +1,8 @@
+# ⚠️ This is an archive.
+### `flutter/plugins` has been merged in `flutter/packages`, so I also merged this fork, you can find the new fork [here](https://github.com/RideMyPark/flutter_packages).
+
+---
+
 # Flutter plugins
 
 [![Build Status](https://api.cirrus-ci.com/github/flutter/plugins.svg)](https://cirrus-ci.com/github/flutter/plugins/master)
